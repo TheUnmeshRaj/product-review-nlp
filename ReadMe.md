@@ -27,3 +27,35 @@
 │  └─────────────────────────┘  └─────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## Folder Structure
+
+```
+reviewlens/
+├── extension/
+│   ├── public/
+│   │   ├── manifest.json      # MV3 manifest
+│   │   ├── content.css        # Minimal injected styles
+│   │   └── icons/             # Extension icons (add your own)
+│   ├── src/
+│   │   ├── components/
+│   │   │   └── Dashboard.jsx  # Full React dashboard
+│   │   ├── content.js         # Scraping + injection logic
+│   │   ├── background.js      # Service worker / proxy
+│   │   └── main.jsx           # React entry point
+│   ├── index.html             # Dashboard shell
+│   ├── vite.config.js
+│   └── package.json
+│
+└── backend/
+    ├── app/
+    │   ├── main.py            # FastAPI app
+    │   ├── routers/
+    │   │   └── analysis.py    # /analyze endpoint
+    │   ├── services/
+    │   │   └── nlp_service.py # Sentiment + aspect pipeline
+    │   └── models/
+    │       └── schemas.py     # Pydantic request/response
+    ├── requirements.txt
+    └── README.md
+```
