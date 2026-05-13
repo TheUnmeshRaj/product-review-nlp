@@ -71,6 +71,15 @@ function getAsinFromUrl() {
 function injectTriggerButton(product) {
   if (document.getElementById('review-intel-btn')) return;
 
+  // Inject Google Fonts for modern typography
+  if (!document.getElementById('ri-fonts')) {
+    const fontLink = document.createElement('link');
+    fontLink.id = 'ri-fonts';
+    fontLink.rel = 'stylesheet';
+    fontLink.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap';
+    document.head.appendChild(fontLink);
+  }
+
   const btn = document.createElement('div');
   btn.id = 'review-intel-btn';
   btn.setAttribute('role', 'button');
@@ -78,9 +87,8 @@ function injectTriggerButton(product) {
   btn.setAttribute('aria-label', 'Analyze Amazon reviews');
   btn.innerHTML = `
     <div id="ri-fab">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <circle cx="12" cy="12" r="3"></circle>
-        <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"></path>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12c-2.4 0-4.6-1.1-6.2-3.1C13.2 6.9 12 4.7 12 2c0 2.7-1.2 4.9-2.8 6.9C7.6 10.9 5.4 12 3 12c2.4 0 4.6 1.1 6.2 3.1 1.6 2 2.8 4.2 2.8 6.9 0-2.7 1.2-4.9 2.8-6.9 1.6-2 3.8-3.1 6.2-3.1z"/>
       </svg>
       <span>Analyze Reviews</span>
     </div>
@@ -187,21 +195,16 @@ async function runPipeline(product, overlay) {
 
   let analytics;
   try {
-    const response = await fetch(`${BACKEND_URL}/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        product,
-        reviews: uniqueReviews,
-      }),
+    const response = await chrome.runtime.sendMessage({
+      type: 'ANALYZE_REVIEWS',
+      payload: { product, reviews: uniqueReviews }
     });
 
-    if (!response.ok) {
-      const errorBody = await response.json().catch(() => ({}));
-      throw new Error(errorBody.detail || `Backend error ${response.status}`);
+    if (!response || !response.success) {
+      throw new Error(response?.error || 'No response from background script');
     }
 
-    analytics = await response.json();
+    analytics = response.data;
   } catch (error) {
     setStatusSafe('error', `Backend error: ${error.message}. Is FastAPI running on :8000?`);
     return;
