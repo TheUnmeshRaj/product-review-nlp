@@ -1,12 +1,16 @@
 # main.py — FastAPI backend for Review Intel
 
+from typing import Any, Dict, List, Optional
+
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-import uvicorn
 
-from nlp.pipeline import ReviewPipeline
+try:
+    from backend.nlp.pipeline import ReviewPipeline
+except ImportError:
+    from nlp.pipeline import ReviewPipeline
 
 app = FastAPI(title="Review Intel API", version="1.0.0")
 
@@ -18,8 +22,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load pipeline once at startup (model download on first run)
-pipeline = ReviewPipeline()
+# Lazily initialize heavy NLP pipeline on first usage
+pipeline = None
+
+
+def get_pipeline() -> ReviewPipeline:
+    global pipeline
+    if pipeline is None:
+        pipeline = ReviewPipeline()
+    return pipeline
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -66,7 +77,8 @@ class AnalyzeResponse(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": pipeline.model_name}
+    model_name = pipeline.model_name if pipeline is not None else "not_loaded"
+    return {"status": "ok", "model": model_name}
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
@@ -78,7 +90,8 @@ def analyze(req: AnalyzeRequest):
         raise HTTPException(status_code=400, detail="Max 300 reviews per request")
 
     try:
-        result = pipeline.run(req.product.dict(), [r.dict() for r in req.reviews], req.aspects or [])
+        runtime_pipeline = get_pipeline()
+        result = runtime_pipeline.run(req.product.dict(), [r.dict() for r in req.reviews], req.aspects or [])
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -89,11 +102,12 @@ def analyze_features(req: AnalyzeRequest):
     """Returns only aspect-level breakdown — faster for feature-specific queries."""
     try:
         texts = [r.body for r in req.reviews if r.body.strip()]
-        aspects = pipeline.extract_aspects_batch(texts)
+        runtime_pipeline = get_pipeline()
+        aspects = runtime_pipeline.extract_aspects_batch(texts)
         return {"aspects": aspects}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)

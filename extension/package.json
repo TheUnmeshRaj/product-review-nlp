@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "main": "background.js",
   "scripts": {
+    "build": "node build.mjs",
+    "clean": "node build.mjs --clean",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
