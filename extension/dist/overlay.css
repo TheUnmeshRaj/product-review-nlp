@@ -1184,3 +1184,15 @@
     transition: none;
   }
 }
+
+/* Panel Collapsed state styling */
+.ri-collapsed #ri-status,
+.ri-collapsed #ri-dashboard {
+  display: none !important;
+}
+
+.ri-collapsed #ri-header {
+  border-bottom-left-radius: var(--ri-radius-lg);
+  border-bottom-right-radius: var(--ri-radius-lg);
+  border-bottom: 0;
+}

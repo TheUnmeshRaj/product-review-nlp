@@ -131,14 +131,16 @@ function mountInlineIntel(product) {
     document.body.appendChild(shell);
   }
 
-  shell.querySelector('#ri-close')?.addEventListener('click', () => closeInlineIntel(shell));
+  shell.querySelector('#ri-close')?.addEventListener('click', () => toggleInlineIntel(shell));
 
   runPipeline(product, shell).catch(() => {});
 }
 
-function closeInlineIntel(shell) {
-  activeSessionId++;
-  shell?.remove();
+function toggleInlineIntel(shell) {
+  const panel = shell.querySelector('#ri-panel');
+  const btn = shell.querySelector('#ri-close');
+  const isCollapsed = panel.classList.toggle('ri-collapsed');
+  btn.textContent = isCollapsed ? 'Unhide' : 'Hide';
 }
 
 function getInlineAnchor() {
@@ -403,7 +405,7 @@ function injectChatUI() {
   `;
 
   chatFab.addEventListener('click', toggleChatWindow);
-  chatFab.addEventListener('pointerdown', (e) => { e.stopPropagation(); toggleChatWindow(); });
+  chatFab.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
   chatFab.setAttribute('tabindex', '0');
   chatFab.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleChatWindow(); } });
   document.body.appendChild(chatFab);
