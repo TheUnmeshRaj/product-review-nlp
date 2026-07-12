@@ -588,6 +588,23 @@
   margin-bottom: 12px;
 }
 
+.ri-feature-focus {
+  display: grid;
+  gap: 8px;
+}
+
+.ri-feature-focus-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ri-feature-focus-help {
+  color: var(--ri-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .ri-chip {
   appearance: none;
   padding: 6px 11px;

@@ -1,0 +1,246 @@
+Review Intel — Full Project Overview
+
+1. Project Summary
+------------------
+Review Intel is a local Amazon review analysis tool composed of a Chrome extension and a FastAPI backend. The extension scrapes Amazon product reviews, sends them to the local backend, and displays a sentiment dashboard inline on the product page.
+
+2. Repository Structure
+-----------------------
+- ReadMe.md
+- render.yaml
+- backend/
+  - main.py
+  - requirements.txt
+  - nlp/
+    - pipeline.py
+- extension/
+  - manifest.json
+  - background.js
+  - content.js
+  - scraper.js
+  - overlay.css
+  - package.json
+  - icons/
+
+3. Core Components
+------------------
+A. Backend (`backend/`)
+   - `main.py`: FastAPI app with `/health`, `/analyze`, and `/analyze/features` endpoints.
+   - `requirements.txt`: Python package requirements.
+   - `nlp/pipeline.py`: ReviewPipeline class that performs sentiment classification, aspect extraction, keyword extraction, summary generation, and verdict creation.
+
+B. Chrome Extension (`extension/`)
+   - `manifest.json`: Manifest V3 configuration, host permissions for Amazon domains and localhost backend, content scripts, background service worker.
+   - `scraper.js`: Amazon review scraper that detects ASIN, page metadata, aspect labels, and scrapes reviews across star ratings, sorts, pages, and aspect keyword filters.
+   - `content.js`: In-page UI injector that displays the Analyze button and overlay dashboard, seals the scraping and analysis process, and renders the returned analytics.
+   - `background.js`: Service worker that receives messages from content script and forwards requests to the local backend at `http://localhost:8000`.
+   - `overlay.css`: Styling for the injected dashboard panel.
+   - `package.json`: Minimal extension package file.
+   - `icons/`: icon assets used by the extension.
+
+4. High-Level Data Flow
+------------------------
+1. User loads an Amazon product page that matches the extension's URL patterns.
+2. `scraper.js` and `content.js` are injected into the page as content scripts.
+3. `content.js` waits for page product metadata and injects an "Analyze Reviews" button.
+4. User clicks the button.
+5. `content.js` calls `window.ReviewScraper.scrapeHolistic()`.
+6. `scraper.js` scrapes:
+   - star-filtered reviews (`one_star` to `five_star`)
+   - sorted by `helpful` and `recent`
+   - up to 5 pages each
+   - page aspect keywords and keyword-filtered review pages
+7. The scraper returns product metadata plus unique review objects.
+8. `content.js` sends the review payload to `background.js` using `chrome.runtime.sendMessage` with `type: 'ANALYZE_REVIEWS'`.
+9. `background.js` makes a POST to `http://localhost:8000/analyze`.
+10. The local FastAPI backend receives the payload and calls `ReviewPipeline.run(...)`.
+11. `ReviewPipeline` annotates reviews with sentiment and aspects, computes metrics, extracts keywords, and builds a summary and verdict.
+12. Backend returns JSON analysis.
+13. `content.js` renders the dashboard overlay with charts, metrics, keyword cloud, praised/complained features, and summary.
+14. The extension badge updates on analysis completion.
+
+5. Extension Details
+----------------------
+A. `manifest.json`
+   - `manifest_version`: 3
+   - `permissions`: `activeTab`, `scripting`, `storage`
+   - `host_permissions`: Amazon domains plus localhost and 127.0.0.1 on port 8000.
+   - `background.service_worker`: `background.js`
+   - `content_scripts`: `scraper.js`, `content.js` and `overlay.css` run at `document_idle` on Amazon product pages.
+
+B. `scraper.js`
+   - `detectProduct()`: extracts ASIN, domain, product name from page URL and DOM.
+   - `extractPageAspects()`: collects aspect keywords from Amazon review page elements.
+   - `buildReviewURL()`: constructs Amazon review page URLs with filters.
+   - `fetchPage()`: fetches review HTML pages, parses reviews.
+   - `parseDoc()`: extracts `id`, `title`, `body`, `rating`, `author`, `date`, `verified`, and `helpful` votes from Amazon review HTML.
+   - `scrapeHolistic()`: performs a broad scraping strategy across star ratings, sorts, pages, and aspect keyword filtered pages.
+   - `scrapeReviews()`: simpler page-by-page review scraping with options.
+
+C. `content.js`
+   - Injects a floating Analyze button into the Amazon page.
+   - Uses `window.ReviewScraper` to detect product info and scrape review data.
+   - Sends review data to the backend through the background service worker.
+   - Displays status messages: scraping, analyzing, error.
+   - Renders inline dashboard visuals: donut chart, star distribution, sentiment trend, keywords, feature cards, summary boxes.
+   - Uses accessible focus and keyboard interaction for the button.
+
+D. `background.js`
+   - Listens for `chrome.runtime.onMessage` events.
+   - Handles `ANALYSIS_COMPLETE` by updating badge text.
+   - Handles `ANALYZE_REVIEWS` by forwarding the payload to the backend and returning the response.
+   - Backend URL is defined as `http://localhost:8000`.
+
+E. `overlay.css`
+   - Defines the panel styling, button styling, charts, cards, responsive layout, and theme variables.
+   - Uses glassy translucent panels, gradients, shadow, and custom fonts.
+   - Includes animation for dashboard entry and custom scrollbar styling.
+
+6. Backend API and Data Contract
+--------------------------------
+A. `backend/main.py`
+   - Creates FastAPI app named `Review Intel API`.
+   - Adds `CORSMiddleware` allowing all origins for ease of local development.
+   - Instantiates `ReviewPipeline` at startup.
+   - Defines Pydantic models:
+     * `ProductInfo`: asin, name, domain, url
+     * `Review`: id, title, body, rating, author, date, verified, helpful
+     * `AnalyzeRequest`: product, reviews, optional aspects
+     * `AnalyzeResponse`: product, total_reviews, sentiment_distribution, aspect_sentiments, top_positive_feature, top_negative_feature, common_complaints, keywords, summary, verdict, reviews
+   - Endpoints:
+     * `GET /health`: returns status and model name.
+     * `POST /analyze`: validates reviews, rejects empty or >300 reviews, runs pipeline, returns analysis.
+     * `POST /analyze/features`: returns only aspect breakdown for supplied review texts.
+
+B. Request JSON format
+   {
+     "product": {"asin": ..., "name": ..., "domain": ..., "url": ...},
+     "reviews": [{"id":..., "title":..., "body":..., "rating":..., "author":..., "date":..., "verified":..., "helpful":...}],
+     "aspects": [optional aspect strings]
+   }
+
+C. Response JSON format
+   {
+     "product": {...},
+     "total_reviews": N,
+     "sentiment_distribution": {"positive": X, "neutral": Y, "negative": Z},
+     "aspect_sentiments": { aspect: {positive, negative, neutral, total} },
+     "top_positive_feature": ..., 
+     "top_negative_feature": ..., 
+     "common_complaints": [...],
+     "keywords": [...],
+     "summary": ..., 
+     "verdict": ..., 
+     "reviews": [ annotated reviews ]
+   }
+
+D. Annotated review fields
+   - `sentiment`: positive/neutral/negative
+   - `confidence`: model confidence score
+   - `aspects`: extracted aspect names matched in the review text
+
+7. NLP Pipeline Details
+------------------------
+A. Initialization
+   - `model_name`: `cardiffnlp/twitter-roberta-base-sentiment-latest`
+   - device: GPU if available else CPU
+   - loads sentiment pipeline with `transformers.pipeline("text-classification")`
+   - loads KeyBERT for keyword extraction
+   - loads spaCy `en_core_web_sm` with parser enabled for noun chunks and sentence splitting
+
+B. Aspect extraction
+   - `ASPECT_SEEDS`: predefined mapped terms for categories such as battery, camera, display, performance, build, heating, software, price, audio, connectivity
+   - `TERM_TO_ASPECT`: flattened mapping from seed term to aspect name
+   - `_extract_text_aspects()`: uses spaCy noun chunks, normalizes, filters stopwords, returns top noun chunk candidates
+   - `extract_aspects_from_text()`: matches page candidate aspects first, falls back to noun chunks, then matches seed terms
+   - `extract_aspects_batch()`: classifies sentiment per text, then counts aspect sentiment across texts
+   - `map_aspect_sentiments()`: computes per-aspect positive/negative/neutral percentages over review corpus
+
+C. Sentiment classification
+   - `classify_sentiment_batch(texts)`: cleans text, truncates to 512 chars, sends to Hugging Face pipeline
+   - Normalizes label output to `positive`, `neutral`, `negative`
+   - Returns `sentiment` and `confidence`
+
+D. Keyword extraction
+   - `extract_keywords(texts, top_n=15)`: combines up to 50 texts, uses KeyBERT with n-gram range (1,2), stop words, diversity
+   - Filters invalid keywords like Amazon, product, review, seller, shipping, numeric tokens, URLs, short text
+   - Falls back to spaCy token frequency if KeyBERT fails
+
+E. Summary and verdict generation
+   - `generate_summary(reviews, aspect_sentiments)`: builds extractive summary with positive ratio, top praised aspect, top complained aspect, and representative sentence if available
+   - `generate_verdict(reviews, aspect_sentiments)`: returns recommendations based on positive review share:
+     * >=75% positive: Highly recommended.
+     * >=55% positive: Generally recommended with caveats.
+     * else: Not recommended — majority of reviews are negative.
+   - Includes best feature and main weakness when available.
+
+F. Common complaints
+   - `extract_common_complaints()`: finds negative reviews, extracts aspects mentioned in them, returns top aspect names
+
+G. Main pipeline `run()`
+   - Normalizes candidate aspects from page scrape
+   - Classifies sentiment of each combined title+body review text
+   - Extracts review aspects, attaches `sentiment`, `confidence`, and `aspects`
+   - Aggregates overall sentiment counts
+   - Computes aspect sentiment percentages
+   - Identifies top positive and negative features
+   - Extracts keywords
+   - Identifies common complaints
+   - Generates summary and verdict
+   - Returns full output payload
+
+8. Models and Libraries Used
+-----------------------------
+- Python
+- FastAPI
+- Uvicorn
+- PyTorch
+- Transformers
+- Hugging Face sentiment pipeline model: `cardiffnlp/twitter-roberta-base-sentiment-latest`
+- KeyBERT for keyword extraction
+- spaCy `en_core_web_sm` for noun chunks, token parsing, and sentence extraction
+- `sentence-transformers` dependency required by KeyBERT
+
+9. Running the Project
+-----------------------
+A. Backend
+   1. `cd backend`
+   2. Create a virtual environment: `python -m venv .venv`
+   3. Activate it: `source .venv/bin/activate` or Windows PowerShell `.
+   4. Install dependencies: `pip install -r requirements.txt`
+   5. Ensure spaCy model installed: `python -m spacy download en_core_web_sm`
+   6. Start backend: `python main.py`
+   7. Backend listens on `http://localhost:8000`
+
+B. Extension
+   1. Open Chrome/Edge `chrome://extensions`
+   2. Enable Developer mode
+   3. Load unpacked extension and select the `extension` folder
+   4. Visit an Amazon product page matching configured host permissions
+   5. Click the injected Analyze Reviews button
+
+10. Important Notes
+-------------------
+- The backend currently allows all CORS origins (`allow_origins=["*"]`), which is acceptable for local development but not production.
+- The extension trusts `http://localhost:8000` for analysis.
+- The scraper is Amazon-specific and may break if Amazon changes page structure.
+- `ReviewPipeline` uses seed-based aspect mapping and extractive heuristics rather than a fully trained aspect extraction model.
+- There are no automated tests included in the repository.
+- The backend caps requests at 300 reviews.
+
+11. Key Files and Purpose
+--------------------------
+- `ReadMe.md`: Project description and setup notes.
+- `backend/main.py`: API entrypoint.
+- `backend/requirements.txt`: Python dependencies.
+- `backend/nlp/pipeline.py`: NLP logic and analytics engine.
+- `extension/manifest.json`: extension configuration.
+- `extension/scraper.js`: Amazon scraper.
+- `extension/content.js`: UI injection and orchestration.
+- `extension/background.js`: messaging and backend proxy.
+- `extension/overlay.css`: dashboard styling.
+- `extension/package.json`: extension package metadata.
+
+12. Summary
+-----------
+This project is a local Amazon review intelligence prototype. It combines browser scraping, a lightweight frontend overlay, and a Python NLP backend to produce sentiment analysis, aspect sentiment, keyword extraction, summary, and recommendation verdicts from Amazon reviews.

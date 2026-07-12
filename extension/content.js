@@ -249,14 +249,16 @@ function renderDashboard(overlay, analytics, scraped) {
   const reviewStats = computeReviewStats(scraped.reviews || []);
   const topStars = summarizeStars(reviewStats.stars);
 
-  // Build praised/complained features
   const aspects = analytics.aspect_sentiments || {};
+  const reviewFeatures = analytics.reviews || scraped.reviews || [];
   const praised = Object.entries(aspects)
     .filter(([_, scores]) => (scores?.positive || 0) > 60)
     .sort((a, b) => (b[1]?.positive || 0) - (a[1]?.positive || 0));
   const complained = Object.entries(aspects)
     .filter(([_, scores]) => (scores?.negative || 0) > 40)
     .sort((a, b) => (b[1]?.negative || 0) - (a[1]?.negative || 0));
+  const featureEntries = buildFeatureSelectionEntries(aspects, reviewFeatures);
+  const selectionState = { mode: 'all', selected: new Set() };
 
   dash.innerHTML = `
     <!-- TOP ANCHOR SECTION: Large 4-column grid with main charts -->
@@ -309,25 +311,16 @@ function renderDashboard(overlay, analytics, scraped) {
       </div>
     </div>
 
-    <!-- PRAISED FEATURES SECTION -->
-    ${praised.length ? `
-      <div class="ri-section">
-        <div class="ri-section-title">Praised Features (${praised.length})</div>
-        <div class="ri-feature-grid">
-          ${praised.map(([feature, scores]) => renderFeatureCard('praised', feature, scores, scraped.reviews, analytics.reviews)).join('')}
-        </div>
+    <div class="ri-section">
+      <div class="ri-section-title">Feature Focus</div>
+      <div id="ri-feature-focus" class="ri-feature-focus">
+        ${renderFeatureSelector(featureEntries, selectionState)}
       </div>
-    ` : ''}
+    </div>
 
-    <!-- COMPLAINED FEATURES SECTION -->
-    ${complained.length ? `
-      <div class="ri-section">
-        <div class="ri-section-title">Complained Features (${complained.length})</div>
-        <div class="ri-feature-grid">
-          ${complained.map(([feature, scores]) => renderFeatureCard('complained', feature, scores, scraped.reviews, analytics.reviews)).join('')}
-        </div>
-      </div>
-    ` : ''}
+    <div id="ri-feature-panels">
+      ${renderFeaturePanels(praised, complained, selectionState, scraped, analytics)}
+    </div>
 
     <!-- DEEPER INSIGHTS -->
     <div class="ri-section">
@@ -353,274 +346,8 @@ function renderDashboard(overlay, analytics, scraped) {
   `;
 
   overlay.querySelector('#ri-close')?.focus?.();
-
-  // Expose latest analytics for the chat assistant to consume
-  try {
-    window.__REVIEW_INTEL_ANALYTICS__ = analytics;
-    window.__REVIEW_INTEL_SCRAPED__ = scraped;
-  } catch (e) {
-    // ignore
-  }
-
-  // Synthesize a flexible verdict + summary from analytics (frontend fallback)
-  const _synth = synthesizeVerdictAndSummary(analytics, scraped);
-
-  // Replace the deeper insights box contents with synthesized versions (keep backend as secondary)
-  const insightsBox = overlay.querySelector('.ri-insight-box');
-  if (insightsBox) {
-    const vNode = overlay.querySelector('#ri-insight-verdict');
-    const sNode = overlay.querySelector('#ri-insight-summary');
-    if (vNode) vNode.innerHTML = `<strong>Verdict:</strong> ${escHtml(_synth.verdict)}${analytics.verdict && analytics.verdict !== _synth.verdict ? `<div class="ri-muted" style="margin-top:6px; font-size:12px;">Backend: ${escHtml(analytics.verdict)}</div>` : ''}`;
-    if (sNode) sNode.innerHTML = `<strong>Summary:</strong> ${escHtml(_synth.summary)}${analytics.summary && analytics.summary !== _synth.summary ? `<div class="ri-muted" style="margin-top:6px; font-size:12px;">Backend: ${escHtml(analytics.summary)}</div>` : ''}`;
-  }
-
-  // Insert inline price history block right after the metrics strip for quick glance
-  try {
-    const metricsEl = dash.querySelector('.ri-metrics');
-    const asin = scraped?.product?.asin || analytics?.product?.asin || '';
-    if (metricsEl) {
-      const priceBlock = document.createElement('div');
-      priceBlock.className = 'ri-section';
-      priceBlock.innerHTML = `
-        <div class="ri-section-title">Price History</div>
-        <div id="ri-price-inline-chart">Loading price history…</div>
-      `;
-      metricsEl.parentNode?.insertBefore(priceBlock, metricsEl.nextSibling);
-      if (asin) fetchAndRenderPriceHistory(asin, priceBlock.querySelector('#ri-price-inline-chart'));
-    }
-  } catch (e) { /* ignore */ }
 }
 
-// ------------------ Floating Chat Assistant ------------------
-function injectChatUI() {
-  if (document.getElementById('ri-chat-fab')) return;
-
-  const chatFab = document.createElement('div');
-  chatFab.id = 'ri-chat-fab';
-  chatFab.setAttribute('role', 'button');
-  chatFab.setAttribute('aria-label', 'Open Review Assistant');
-  // Use inline SVG data URI so the icon renders even from page scope
-  chatFab.innerHTML = `
-    <img id="ri-chat-fab-icon" src="${CHAT_ICON_SVG}" alt="Review Assistant" />
-  `;
-
-  chatFab.addEventListener('click', toggleChatWindow);
-  chatFab.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
-  chatFab.setAttribute('tabindex', '0');
-  chatFab.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleChatWindow(); } });
-  document.body.appendChild(chatFab);
-}
-
-function toggleChatWindow() {
-  const existing = document.getElementById('ri-chat-window');
-  if (existing) {
-    existing.remove();
-    return;
-  }
-
-  const win = document.createElement('div');
-  win.id = 'ri-chat-window';
-  win.innerHTML = `
-    <div id="ri-chat-header">
-      <div class="ri-chat-header-left">
-        <img class="ri-chat-logo" src="${CHAT_ICON_SVG}" alt="logo" />
-        <div class="ri-chat-title-wrap">
-          <div class="ri-chat-title">Review Assistant</div>
-          <div class="ri-chat-sub">AI product recommendations</div>
-        </div>
-      </div>
-      <button id="ri-chat-close" aria-label="Close chat">✕</button>
-    </div>
-    <div id="ri-chat-messages" role="log" aria-live="polite"></div>
-    <form id="ri-chat-form">
-      <input id="ri-chat-input" placeholder="Ask about camera, storage, battery..." autocomplete="off" />
-      <button id="ri-chat-send" type="submit">Send</button>
-    </form>
-  `;
-
-  document.body.appendChild(win);
-  document.getElementById('ri-chat-close').addEventListener('click', () => win.remove());
-  const form = win.querySelector('#ri-chat-form');
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const input = win.querySelector('#ri-chat-input');
-    const text = (input.value || '').trim();
-    if (!text) return;
-    appendChatMessage('user', text);
-    input.value = '';
-    appendChatMessage('assistant', 'Thinking...');
-    const response = await generateChatResponse(text);
-    // replace last assistant 'Thinking...' with actual response
-    const msgs = win.querySelectorAll('.ri-chat-msg');
-    const last = Array.from(msgs).reverse().find(el => el.dataset.role === 'assistant');
-    if (last) last.querySelector('.ri-chat-bubble').textContent = response;
-  });
-}
-
-function appendChatMessage(role, text) {
-  const win = document.getElementById('ri-chat-window');
-  if (!win) return;
-  const container = win.querySelector('#ri-chat-messages');
-  const el = document.createElement('div');
-  el.className = `ri-chat-msg ri-chat-${role}`;
-  el.dataset.role = role;
-  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  el.innerHTML = `
-    <div class="ri-chat-row">
-      ${role === 'assistant' ? '<div class="ri-chat-avatar"><img src="' + (chrome.runtime?.getURL ? chrome.runtime.getURL('icons/icon48.png') : 'icons/icon48.png') + '"/></div>' : ''}
-      <div class="ri-chat-body">
-        <div class="ri-chat-bubble">${escHtml(text)}</div>
-        <div class="ri-chat-time">${time}</div>
-      </div>
-    </div>
-  `;
-  container.appendChild(el);
-  container.scrollTop = container.scrollHeight;
-}
-
-async function generateChatResponse(text) {
-  const analytics = window.__REVIEW_INTEL_ANALYTICS__;
-  const scraped = window.__REVIEW_INTEL_SCRAPED__;
-
-  if (!analytics || !scraped) {
-    return 'I don\'t have analysis data yet. Please run "Analyze Reviews" first or open the inline analysis.';
-  }
-
-  // Simple keyword-based intent extraction
-  const mapping = {
-    camera: ['camera', 'photo', 'picture', 'pixel', 'mp'],
-    storage: ['storage', 'rom', 'gb', 'memory'],
-    battery: ['battery', 'mah', 'charge', 'charging', 'battery life'],
-    display: ['display', 'screen', 'resolution', 'brightness'],
-    performance: ['performance', 'speed', 'lag', 'processor', 'cpu'],
-    price: ['price', 'cost', 'value', 'expensive', 'cheap']
-  };
-
-  const lower = text.toLowerCase();
-  const asked = Object.keys(mapping).filter(k => mapping[k].some(w => lower.includes(w)));
-
-  let parts = [];
-  // Use synthesized verdict/summary (frontend) for flexible replies
-  const _synth = synthesizeVerdictAndSummary(analytics, scraped);
-  if (_synth.verdict) parts.push(`Verdict: ${_synth.verdict}`);
-  if (_synth.summary) parts.push(`Summary: ${_synth.summary}`);
-
-  if (asked.length) {
-    for (const aspect of asked) {
-      const scores = analytics.aspect_sentiments?.[aspect] || null;
-      if (scores) {
-        const pos = Math.round(scores.positive || 0);
-        const neg = Math.round(scores.negative || 0);
-        const neutral = Math.round(scores.neutral || 0);
-        const line = `${aspect.charAt(0).toUpperCase() + aspect.slice(1)} — ${pos}% positive, ${neg}% negative, ${neutral}% neutral.`;
-        parts.push(line);
-      } else {
-        parts.push(`${aspect.charAt(0).toUpperCase() + aspect.slice(1)} — no explicit aspect data available.`);
-      }
-    }
-  } else {
-    parts.push('I could not detect a specific aspect in your question. Try asking about camera, storage, battery, display, performance, or price.');
-  }
-
-  return parts.join('\n\n');
-}
-
-function synthesizeVerdictAndSummary(analytics = {}, scraped = {}) {
-  const total = analytics.total_reviews || (scraped.reviews || []).length || 0;
-  const dist = analytics.sentiment_distribution || { positive: 0, neutral: 0, negative: 0 };
-  const pos = Number(dist.positive || 0);
-  const neu = Number(dist.neutral || 0);
-  const neg = Number(dist.negative || 0);
-  const posPct = Math.round((total ? (pos / Math.max(1, total)) * 100 : pos));
-  const negPct = Math.round((total ? (neg / Math.max(1, total)) * 100 : neg));
-
-  const aspects = analytics.aspect_sentiments || {};
-  let topPos = null, topNeg = null;
-  Object.entries(aspects).forEach(([k, v]) => {
-    if (!topPos || (v.positive || 0) > (aspects[topPos]?.positive || 0)) topPos = k;
-    if (!topNeg || (v.negative || 0) > (aspects[topNeg]?.negative || 0)) topNeg = k;
-  });
-
-  // Build verdict
-  let verdict = '';
-  if (posPct >= 65) verdict = 'Generally recommended';
-  else if (posPct >= 45) verdict = 'May be worth considering depending on priorities';
-  else verdict = 'Not recommended for most buyers';
-  if (negPct >= 40) verdict += ' — notable concerns reported';
-
-  // Build summary
-  const summaryParts = [];
-  if (total) summaryParts.push(`${posPct}% of ${total} reviews are positive.`);
-  if (topPos) summaryParts.push(`Users most frequently praise ${topPos}.`);
-  if (topNeg) summaryParts.push(`Common complaint: ${topNeg}.`);
-  if (!topPos && analytics.keywords && analytics.keywords.length) summaryParts.push(`Commonly mentioned: ${analytics.keywords.slice(0,4).join(', ')}.`);
-
-  const summary = summaryParts.length ? summaryParts.join(' ') : (analytics.summary || 'No detailed summary available.');
-
-  return { verdict, summary };
-}
-
-function renderPriceHistoryCard(analytics, scraped) {
-  const asin = analytics?.product?.asin || scraped?.product?.asin || (analytics?.reviews?.length ? analytics.reviews[0].asin : null) || (scraped?.product?.asin);
-  const placeholder = `
-    <div class="ri-price-card">
-      <div id="ri-price-chart">Loading price history…</div>
-      <div class="ri-price-note">If price history is unavailable, configure a price API in the background script.</div>
-    </div>
-  `;
-
-  (async () => {
-    try {
-      let values = null;
-      let symbol = '₹';
-      let currentVal = 'N/A';
-      
-      const resp = await new Promise(resolve => {
-        try {
-          chrome.runtime.sendMessage({ type: 'FETCH_PRICE_HISTORY', asin }, (r) => {
-            if (chrome.runtime.lastError) resolve(null);
-            else resolve(r);
-          });
-        } catch (err) {
-          resolve(null);
-        }
-      });
-
-      if (resp && resp.success && resp.data && Array.isArray(resp.data.history)) {
-        const history = resp.data.history.slice(-60);
-        values = history.map(p => Number(p.price || p));
-        currentVal = `₹${values[values.length - 1]}`;
-      } else {
-        const scrapedPrice = getCurrentPriceFromPage();
-        if (scrapedPrice) {
-          values = generatePriceHistory(scrapedPrice.price);
-          symbol = scrapedPrice.symbol;
-          currentVal = `${symbol}${scrapedPrice.price}`;
-        }
-      }
-
-      const el = document.querySelector('#ri-price-chart');
-      if (values && values.length) {
-        const max = Math.max(...values, 1);
-        const min = Math.min(...values, 0);
-        const w = 220; const h = 80; const pad = 6;
-        const points = values.map((v, i) => `${Math.round(pad + (i / (values.length - 1 || 1)) * (w - pad * 2))},${Math.round(h - pad - ((v - min) / (max - min || 1)) * (h - pad * 2))}`).join(' ');
-
-        const svg = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline fill="none" stroke="#3b82f6" stroke-width="2" points="${points}"/></svg>`;
-        if (el) el.innerHTML = svg + `<div class="ri-price-latest">Latest: ${currentVal}</div>`;
-        const noteEl = document.querySelector('.ri-price-note');
-        if (noteEl) noteEl.textContent = 'Estimated history based on current page price.';
-      } else {
-        if (el) el.textContent = 'Price history unavailable.';
-      }
-    } catch (e) {
-      const el = document.querySelector('#ri-price-chart');
-      if (el) el.textContent = 'Price history unavailable.';
-    }
-  })();
-
-  return placeholder;
-}
 function renderSentimentTrendChart(sentimentDistribution) {
   const total = Math.max(1, (sentimentDistribution.positive || 0) + (sentimentDistribution.neutral || 0) + (sentimentDistribution.negative || 0));
   const posPct = Math.round((sentimentDistribution.positive || 0) / total * 100);
