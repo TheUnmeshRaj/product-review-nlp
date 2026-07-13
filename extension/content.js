@@ -118,6 +118,7 @@ function injectTriggerButton(product) {
 
 function mountInlineIntel(product) {
   document.getElementById('review-intel-overlay')?.remove();
+  chatHistory = [];
 
   const shell = document.createElement('section');
   shell.id = 'review-intel-overlay';
@@ -618,6 +619,138 @@ function escHtml(str) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ------------------ Floating Chat Assistant ------------------
+let chatHistory = [];
+
+function injectChatUI() {
+  if (document.getElementById('ri-chat-fab')) return;
+
+  const chatFab = document.createElement('div');
+  chatFab.id = 'ri-chat-fab';
+  chatFab.setAttribute('role', 'button');
+  chatFab.setAttribute('aria-label', 'Open Review Assistant');
+  chatFab.innerHTML = `
+    <img id="ri-chat-fab-icon" src="${CHAT_ICON_SVG}" alt="Review Assistant" />
+  `;
+
+  chatFab.addEventListener('click', toggleChatWindow);
+  chatFab.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
+  chatFab.setAttribute('tabindex', '0');
+  chatFab.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleChatWindow(); } });
+  document.body.appendChild(chatFab);
+}
+
+function toggleChatWindow() {
+  const existing = document.getElementById('ri-chat-window');
+  if (existing) {
+    existing.remove();
+    return;
+  }
+
+  const win = document.createElement('div');
+  win.id = 'ri-chat-window';
+  win.innerHTML = `
+    <div id="ri-chat-header">
+      <div class="ri-chat-header-left">
+        <img class="ri-chat-logo" src="${CHAT_ICON_SVG}" alt="logo" />
+        <div class="ri-chat-title-wrap">
+          <div class="ri-chat-title">Review Assistant</div>
+          <div class="ri-chat-sub">AI product recommendations</div>
+        </div>
+      </div>
+      <button id="ri-chat-close" aria-label="Close chat">✕</button>
+    </div>
+    <div id="ri-chat-messages" role="log" aria-live="polite"></div>
+    <form id="ri-chat-form">
+      <input id="ri-chat-input" placeholder="Ask about camera, storage, battery..." autocomplete="off" />
+      <button id="ri-chat-send" type="submit">Send</button>
+    </form>
+  `;
+
+  document.body.appendChild(win);
+  document.getElementById('ri-chat-close').addEventListener('click', () => win.remove());
+  const form = win.querySelector('#ri-chat-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = win.querySelector('#ri-chat-input');
+    const text = (input.value || '').trim();
+    if (!text) return;
+    appendChatMessage('user', text);
+    input.value = '';
+    appendChatMessage('assistant', 'Thinking...');
+    
+    let asin = window.__REVIEW_INTEL_SCRAPED__?.product?.asin || window.__REVIEW_INTEL_ANALYTICS__?.product?.asin || '';
+    if (!asin) {
+      asin = getAsinFromUrl();
+    }
+
+    const response = await generateChatResponse(text, asin);
+    
+    const msgs = win.querySelectorAll('.ri-chat-msg');
+    const last = Array.from(msgs).reverse().find(el => el.dataset.role === 'assistant');
+    if (last) last.querySelector('.ri-chat-bubble').textContent = response;
+  });
+}
+
+function appendChatMessage(role, text) {
+  const win = document.getElementById('ri-chat-window');
+  if (!win) return;
+  const container = win.querySelector('#ri-chat-messages');
+  const el = document.createElement('div');
+  el.className = `ri-chat-msg ri-chat-${role}`;
+  el.dataset.role = role;
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  el.innerHTML = `
+    <div class="ri-chat-row">
+      ${role === 'assistant' ? '<div class="ri-chat-avatar"><img src="' + (chrome.runtime?.getURL ? chrome.runtime.getURL('icons/icon48.png') : 'icons/icon48.png') + '"/></div>' : ''}
+      <div class="ri-chat-body">
+        <div class="ri-chat-bubble">${escHtml(text)}</div>
+        <div class="ri-chat-time">${time}</div>
+      </div>
+    </div>
+  `;
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+}
+
+async function generateChatResponse(text, asin) {
+  if (!asin) {
+    return 'Could not identify the product ASIN. Please refresh the page and try again.';
+  }
+
+  try {
+    const resp = await fetch(`${BACKEND_URL}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        asin: asin,
+        message: text,
+        history: chatHistory
+      })
+    });
+
+    if (!resp.ok) {
+      const errBody = await resp.json().catch(() => ({}));
+      return `Error: ${errBody.detail || 'Failed to get chat response from server.'}`;
+    }
+
+    const data = await resp.json();
+    const reply = data.response;
+    
+    chatHistory.push({ role: 'user', content: text });
+    chatHistory.push({ role: 'assistant', content: reply });
+    
+    if (chatHistory.length > 20) {
+      chatHistory = chatHistory.slice(-20);
+    }
+
+    return reply;
+  } catch (error) {
+    console.error('[ReviewIntel] Chat error:', error);
+    return `Connection error. Is FastAPI running on port 8000?`;
+  }
 }
 
 async function fetchAndRenderPriceHistory(asin, container) {
