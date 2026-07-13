@@ -1,6 +1,7 @@
 # main.py — FastAPI backend for Review Intel
 
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 import uvicorn
@@ -9,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from bs4 import BeautifulSoup
 
 try:
     from backend.nlp.pipeline import ReviewPipeline
@@ -89,6 +91,12 @@ class AnalyzeResponse(BaseModel):
     reviews: List[Dict[str, Any]]
 
 
+class AnalyzeHtmlRequest(BaseModel):
+    html: str
+    url: Optional[str] = None
+    aspects: Optional[List[str]] = []
+
+
 class ChatRequest(BaseModel):
     asin: str
     message: str
@@ -97,6 +105,107 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+
+
+# ── Parser Helper ─────────────────────────────────────────────────────────────
+
+def parse_amazon_html(html_content: str, url: Optional[str] = None) -> Dict[str, Any]:
+    soup = BeautifulSoup(html_content, "html.parser")
+    
+    # Extract Product Name
+    name_el = soup.find(id="productTitle") or soup.select_one("h1.a-size-large") or soup.find("h1")
+    product_name = name_el.get_text().strip() if name_el else "Unknown Product"
+    
+    # Extract ASIN
+    asin = None
+    if url:
+        asin_match = re.search(r"\/(?:dp|product-reviews)\/([A-Z0-9]{10})", url)
+        if asin_match:
+            asin = asin_match.group(1)
+            
+    if not asin:
+        asin_el = soup.find(id="ASIN") or soup.find(attrs={"name": "ASIN"})
+        if asin_el:
+            asin = asin_el.get("value") or asin_el.get("content")
+            
+    if not asin:
+        dp_link = soup.select_one("link[rel='canonical']")
+        if dp_link and dp_link.get("href"):
+            asin_match = re.search(r"\/(?:dp|product-reviews)\/([A-Z0-9]{10})", dp_link.get("href"))
+            if asin_match:
+                asin = asin_match.group(1)
+                
+    asin = asin or "UNKNOWN"
+    
+    # Extract Reviews
+    review_elements = soup.select('[data-hook="review"], .a-section.review, [id^="customer_review-"]')
+    
+    reviews = []
+    for el in review_elements:
+        try:
+            # Rating
+            rating_el = el.select_one('[data-hook="review-star-rating"] .a-icon-alt, [data-hook="cmps-review-star-rating"] .a-icon-alt, .a-icon-star .a-icon-alt, .review-rating .a-icon-alt')
+            rating_text = rating_el.get_text() if rating_el else ""
+            rating_match = re.search(r"([\d.]+)", rating_text)
+            rating = float(rating_match.group(1)) if rating_match else None
+            
+            # Title
+            title_el = el.select_one('[data-hook="review-title"], .review-title')
+            title = ""
+            if title_el:
+                for icon in title_el.select(".a-icon-alt"):
+                    icon.decompose()
+                title = title_el.get_text().strip()
+                
+            # Body
+            body_el = el.select_one('[data-hook="review-body"] span, [data-hook="review-body"], .review-text')
+            body = body_el.get_text().strip() if body_el else ""
+            if not body:
+                continue
+                
+            # Author
+            author_el = el.select_one('.a-profile-name, [data-hook="review-author"], .author')
+            author = author_el.get_text().strip() if author_el else "Anonymous"
+            
+            # Date
+            date_el = el.select_one('[data-hook="review-date"], .review-date')
+            date_raw = date_el.get_text().strip() if date_el else ""
+            date_match = re.search(r"on (.+)$", date_raw)
+            date = date_match.group(1) if date_match else date_raw
+            
+            # Verified
+            verified = bool(el.select_one('[data-hook="avp-badge"], .verified-purchase') or el.select_one('[data-hook="avp-badge"]'))
+            
+            # Helpful
+            helpful_el = el.select_one('[data-hook="helpful-vote-statement"]')
+            helpful_text = helpful_el.get_text() if helpful_el else ""
+            helpful_match = re.search(r"(\d+)", helpful_text)
+            helpful = int(helpful_match.group(1)) if helpful_match else 0
+            
+            review_id = el.get("id") or f"r_{os.urandom(4).hex()}"
+            
+            reviews.append({
+                "id": review_id,
+                "title": title,
+                "body": body,
+                "rating": rating,
+                "author": author,
+                "date": date,
+                "verified": verified,
+                "helpful": helpful
+            })
+        except Exception:
+            continue
+            
+    return {
+        "product": {
+            "asin": asin,
+            "name": product_name,
+            "domain": "amazon.in" if "amazon.in" in (url or "") else "amazon.com",
+            "url": url or f"https://www.amazon.com/dp/{asin}"
+        },
+        "reviews": reviews
+    }
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -129,6 +238,42 @@ def analyze(req: AnalyzeRequest):
         )
         
         return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/analyze/html", response_model=AnalyzeResponse)
+def analyze_html(req: AnalyzeHtmlRequest):
+    if not req.html.strip():
+        raise HTTPException(status_code=400, detail="HTML content is empty")
+
+    try:
+        parsed = parse_amazon_html(req.html, req.url)
+        product = parsed["product"]
+        reviews = parsed["reviews"]
+
+        if not reviews:
+            raise HTTPException(status_code=400, detail="No reviews found in the HTML content")
+
+        # Limit to max 300 reviews
+        reviews = reviews[:300]
+
+        pipeline = get_pipeline()
+        result = pipeline.run(product, reviews, req.aspects or [])
+        
+        # Cache product data and reviews locally in SQLite database
+        save_product_data(
+            asin=product["asin"],
+            name=product["name"],
+            domain=product["domain"],
+            url=product["url"],
+            analytics=result,
+            reviews=reviews
+        )
+        
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -223,7 +368,7 @@ async def chat(req: ChatRequest):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "llama3-8b-8192",
+                    "model": "llama-3.1-8b-instant",
                     "messages": messages,
                     "temperature": 0.2,
                     "max_tokens": 800

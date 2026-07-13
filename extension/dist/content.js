@@ -757,6 +757,68 @@ async function generateChatResponse(text, asin) {
   }
 }
 
+function renderPriceHistoryCard(analytics, scraped) {
+  const asin = analytics?.product?.asin || scraped?.product?.asin || (analytics?.reviews?.length ? analytics.reviews[0].asin : null) || (scraped?.product?.asin);
+  const placeholder = `
+    <div class="ri-price-card">
+      <div id="ri-price-chart">Loading price history…</div>
+      <div class="ri-price-note">If price history is unavailable, configure a price API in the background script.</div>
+    </div>
+  `;
+
+  (async () => {
+    try {
+      let values = null;
+      let symbol = '₹';
+      let currentVal = 'N/A';
+      
+      const resp = await new Promise(resolve => {
+        try {
+          chrome.runtime.sendMessage({ type: 'FETCH_PRICE_HISTORY', asin }, (r) => {
+            if (chrome.runtime.lastError) resolve(null);
+            else resolve(r);
+          });
+        } catch (err) {
+          resolve(null);
+        }
+      });
+
+      if (resp && resp.success && resp.data && Array.isArray(resp.data.history)) {
+        const history = resp.data.history.slice(-60);
+        values = history.map(p => Number(p.price || p));
+        currentVal = `₹${values[values.length - 1]}`;
+      } else {
+        const scrapedPrice = getCurrentPriceFromPage();
+        if (scrapedPrice) {
+          values = generatePriceHistory(scrapedPrice.price);
+          symbol = scrapedPrice.symbol;
+          currentVal = `${symbol}${scrapedPrice.price}`;
+        }
+      }
+
+      const el = document.querySelector('#ri-price-chart');
+      if (values && values.length) {
+        const max = Math.max(...values, 1);
+        const min = Math.min(...values, 0);
+        const w = 220; const h = 80; const pad = 6;
+        const points = values.map((v, i) => `${Math.round(pad + (i / (values.length - 1 || 1)) * (w - pad * 2))},${Math.round(h - pad - ((v - min) / (max - min || 1)) * (h - pad * 2))}`).join(' ');
+
+        const svg = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline fill="none" stroke="#3b82f6" stroke-width="2" points="${points}"/></svg>`;
+        if (el) el.innerHTML = svg + `<div class="ri-price-latest">Latest: ${currentVal}</div>`;
+        const noteEl = document.querySelector('.ri-price-note');
+        if (noteEl) noteEl.textContent = 'Estimated history based on current page price.';
+      } else {
+        if (el) el.textContent = 'Price history unavailable.';
+      }
+    } catch (e) {
+      const el = document.querySelector('#ri-price-chart');
+      if (el) el.textContent = 'Price history unavailable.';
+    }
+  })();
+
+  return placeholder;
+}
+
 async function fetchAndRenderPriceHistory(asin, container) {
   if (!container) return;
   try {
