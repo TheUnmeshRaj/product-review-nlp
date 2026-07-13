@@ -351,6 +351,132 @@ function renderDashboard(overlay, analytics, scraped) {
   `;
 
   overlay.querySelector('#ri-close')?.focus?.();
+  attachFeatureSelectionListeners(overlay, selectionState, praised, complained, scraped, analytics);
+}
+
+function buildFeatureSelectionEntries(aspects, reviews) {
+  const entries = [];
+  for (const [name, scores] of Object.entries(aspects || {})) {
+    const pos = scores.positive || 0;
+    const neg = scores.negative || 0;
+    const total = scores.total || 0;
+    entries.push({
+      name: name,
+      positive: pos,
+      negative: neg,
+      total: total
+    });
+  }
+  return entries.sort((a, b) => b.total - a.total);
+}
+
+function renderFeatureSelector(featureEntries, selectionState) {
+  if (!featureEntries || !featureEntries.length) {
+    return '<div class="ri-empty">No aspects extracted.</div>';
+  }
+
+  const chips = featureEntries.map(entry => {
+    const isSelected = selectionState.selected.has(entry.name);
+    return `
+      <button type="button" class="ri-chip ${isSelected ? 'ri-chip--selected' : ''}" data-feature="${escHtml(entry.name)}">
+        ${escHtml(entry.name)} (${entry.total})
+      </button>
+    `;
+  }).join('');
+
+  return `
+    <div class="ri-feature-focus-controls">
+      <button type="button" class="ri-chip ri-chip--all ${selectionState.mode === 'all' ? 'ri-chip--selected' : ''}" data-mode="all">All Features</button>
+      ${chips}
+    </div>
+    <div class="ri-feature-focus-help">Click to filter review cards highlighting these specific features.</div>
+  `;
+}
+
+function renderFeaturePanels(praised, complained, selectionState, scraped, analytics) {
+  let filteredPraised = praised || [];
+  let filteredComplained = complained || [];
+
+  if (selectionState.mode !== 'all' && selectionState.selected.size > 0) {
+    filteredPraised = praised.filter(([name]) => selectionState.selected.has(name));
+    filteredComplained = complained.filter(([name]) => selectionState.selected.has(name));
+  }
+
+  const allReviews = scraped.reviews || [];
+  const backendReviews = analytics.reviews || [];
+
+  const praisedCards = filteredPraised.map(([feature, scores]) => 
+    renderFeatureCard('praised', feature, scores, allReviews, backendReviews)
+  ).join('');
+
+  const complainedCards = filteredComplained.map(([feature, scores]) => 
+    renderFeatureCard('complained', feature, scores, allReviews, backendReviews)
+  ).join('');
+
+  return `
+    <!-- PRAISED FEATURES SECTION -->
+    ${praisedCards ? `
+      <div class="ri-section">
+        <div class="ri-section-title">Praised Features (${filteredPraised.length})</div>
+        <div class="ri-feature-grid">
+          ${praisedCards}
+        </div>
+      </div>
+    ` : ''}
+
+    <!-- COMPLAINED FEATURES SECTION -->
+    ${complainedCards ? `
+      <div class="ri-section">
+        <div class="ri-section-title">Complained Features (${filteredComplained.length})</div>
+        <div class="ri-feature-grid">
+          ${complainedCards}
+        </div>
+      </div>
+    ` : ''}
+  `;
+}
+
+function attachFeatureSelectionListeners(overlay, selectionState, praised, complained, scraped, analytics) {
+  const dash = overlay.querySelector('#ri-dashboard');
+  if (!dash) return;
+
+  dash.addEventListener('click', (e) => {
+    const chip = e.target.closest('.ri-chip');
+    if (!chip) return;
+
+    const mode = chip.dataset.mode;
+    const feature = chip.dataset.feature;
+
+    if (mode === 'all') {
+      selectionState.mode = 'all';
+      selectionState.selected.clear();
+    } else if (feature) {
+      selectionState.mode = 'custom';
+      if (selectionState.selected.has(feature)) {
+        selectionState.selected.delete(feature);
+      } else {
+        selectionState.selected.add(feature);
+      }
+      if (selectionState.selected.size === 0) {
+        selectionState.mode = 'all';
+      }
+    }
+
+    // Re-render selector and panels
+    const aspects = analytics.aspect_sentiments || {};
+    const reviewFeatures = analytics.reviews || scraped.reviews || [];
+    const featureEntries = buildFeatureSelectionEntries(aspects, reviewFeatures);
+
+    const selectorWrap = dash.querySelector('#ri-feature-focus');
+    if (selectorWrap) {
+      selectorWrap.innerHTML = renderFeatureSelector(featureEntries, selectionState);
+    }
+
+    const panelsWrap = dash.querySelector('#ri-feature-panels');
+    if (panelsWrap) {
+      panelsWrap.innerHTML = renderFeaturePanels(praised, complained, selectionState, scraped, analytics);
+    }
+  });
 }
 
 function renderSentimentTrendChart(sentimentDistribution) {
