@@ -1213,3 +1213,52 @@
   border-bottom-right-radius: var(--ri-radius-lg);
   border-bottom: 0;
 }
+
+/* Time range selector styling */
+.ri-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ri-select-filter {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.6) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%231e293b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>") no-repeat right 12px center;
+  background-size: 14px;
+  color: var(--ri-ink);
+  font-family: var(--ri-font-sans);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0 32px 0 16px;
+  height: 36px;
+  cursor: pointer;
+  box-shadow: var(--ri-shadow-sm);
+  transition: all 200ms ease;
+  outline: none;
+}
+
+.ri-select-filter:hover {
+  transform: translateY(-2px);
+  background-color: white;
+  box-shadow: 0 8px 16px rgba(15,23,42,0.1);
+}
+
+.ri-select-filter:focus-visible {
+  outline: 2px solid var(--ri-accent);
+  outline-offset: 3px;
+}
+
+/* Chat bubble styling for markdown lists and paragraphs */
+.ri-chat-p-gap {
+  height: 8px;
+}
+
+.ri-chat-list {
+  margin: 4px 0;
+  padding-left: 18px;
+  list-style-type: disc;
+}

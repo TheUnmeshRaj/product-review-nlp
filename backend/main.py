@@ -2,6 +2,7 @@
 
 import os
 import re
+import datetime
 from typing import Any, Dict, List, Optional
 
 import uvicorn
@@ -75,6 +76,7 @@ class AnalyzeRequest(BaseModel):
     product: ProductInfo
     reviews: List[Review]
     aspects: Optional[List[str]] = []
+    time_filter: Optional[str] = "all"
 
 
 class AnalyzeResponse(BaseModel):
@@ -95,6 +97,7 @@ class AnalyzeHtmlRequest(BaseModel):
     html: str
     url: Optional[str] = None
     aspects: Optional[List[str]] = []
+    time_filter: Optional[str] = "all"
 
 
 class ChatRequest(BaseModel):
@@ -107,7 +110,51 @@ class ChatResponse(BaseModel):
     response: str
 
 
-# ── Parser Helper ─────────────────────────────────────────────────────────────
+# ── Parser & Date Helpers ──────────────────────────────────────────────────────
+
+MONTH_MAP = {
+    "january": 1, "jan": 1,
+    "february": 2, "feb": 2,
+    "march": 3, "mar": 3,
+    "april": 4, "apr": 4,
+    "may": 5,
+    "june": 6, "jun": 6,
+    "july": 7, "jul": 7,
+    "august": 8, "aug": 8,
+    "september": 9, "sep": 9, "sept": 9,
+    "october": 10, "oct": 10,
+    "november": 11, "nov": 11,
+    "december": 12, "dec": 12
+}
+
+
+def parse_amazon_date(date_str: str) -> Optional[datetime.date]:
+    if not date_str:
+        return None
+    s = date_str.lower().strip()
+    s = re.sub(r"^reviewed in .* on ", "", s)
+    year_match = re.search(r"\b(20\d{2})\b", s)
+    if not year_match:
+        return None
+    year = int(year_match.group(1))
+    
+    month = None
+    for m_name, m_val in MONTH_MAP.items():
+        if m_name in s:
+            month = m_val
+            break
+    if not month:
+        return None
+        
+    s_no_year = s.replace(str(year), "")
+    day_match = re.search(r"\b(\d{1,2})\b", s_no_year)
+    day = int(day_match.group(1)) if day_match else 1
+    
+    try:
+        return datetime.date(year, month, day)
+    except ValueError:
+        return None
+
 
 def parse_amazon_html(html_content: str, url: Optional[str] = None) -> Dict[str, Any]:
     soup = BeautifulSoup(html_content, "html.parser")
@@ -220,12 +267,35 @@ def analyze(req: AnalyzeRequest):
     if not req.reviews:
         raise HTTPException(status_code=400, detail="No reviews provided")
 
-    if len(req.reviews) > 300:
+    reviews_list = [r.dict() for r in req.reviews]
+    
+    # Filter reviews by date if time_filter is specified
+    if req.time_filter and req.time_filter != "all":
+        try:
+            days_limit = int(req.time_filter)
+            cutoff_date = datetime.date.today() - datetime.timedelta(days=days_limit)
+            
+            filtered = []
+            for r in reviews_list:
+                r_date = parse_amazon_date(r.get("date", ""))
+                if r_date is None or r_date >= cutoff_date:
+                    filtered.append(r)
+            reviews_list = filtered
+        except Exception as e:
+            print(f"Error filtering by time: {e}")
+            
+    if not reviews_list:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No reviews found in the selected time range (Last {req.time_filter} Days)."
+        )
+
+    if len(reviews_list) > 300:
         raise HTTPException(status_code=400, detail="Max 300 reviews per request")
 
     try:
         pipeline = get_pipeline()
-        result = pipeline.run(req.product.dict(), [r.dict() for r in req.reviews], req.aspects or [])
+        result = pipeline.run(req.product.dict(), reviews_list, req.aspects or [])
         
         # Cache product data and reviews locally in SQLite database
         save_product_data(
@@ -234,7 +304,7 @@ def analyze(req: AnalyzeRequest):
             domain=req.product.domain,
             url=req.product.url,
             analytics=result,
-            reviews=[r.dict() for r in req.reviews]
+            reviews=reviews_list
         )
         
         return result
@@ -254,6 +324,27 @@ def analyze_html(req: AnalyzeHtmlRequest):
 
         if not reviews:
             raise HTTPException(status_code=400, detail="No reviews found in the HTML content")
+
+        # Filter reviews by date if time_filter is specified
+        if req.time_filter and req.time_filter != "all":
+            try:
+                days_limit = int(req.time_filter)
+                cutoff_date = datetime.date.today() - datetime.timedelta(days=days_limit)
+                
+                filtered = []
+                for r in reviews:
+                    r_date = parse_amazon_date(r.get("date", ""))
+                    if r_date is None or r_date >= cutoff_date:
+                        filtered.append(r)
+                reviews = filtered
+            except Exception as e:
+                print(f"Error filtering by time: {e}")
+                
+        if not reviews:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No reviews found in the selected time range (Last {req.time_filter} Days)."
+            )
 
         # Limit to max 300 reviews
         reviews = reviews[:300]
@@ -349,7 +440,8 @@ async def chat(req: ChatRequest):
         f"--- INSTRUCTIONS ---\n"
         f"- Base your answer on the provided metadata and customer reviews context.\n"
         f"- Do not speculate on details that are not in the context. If the context does not discuss the user's specific query, say so clearly.\n"
-        f"- Keep your response helpful, professional, and relatively concise (maximum 3 paragraphs)."
+        f"- Keep your response helpful, professional, and relatively concise (maximum 3 paragraphs).\n"
+        f"- Format your response using markdown. Use **bolding** to emphasize features (e.g., **battery life**), performance highlights, and clear verdicts (e.g., **Verdict:** **Yes, buy** or **Verdict:** **No, do not buy**)."
     )
 
     messages = [{"role": "system", "content": system_prompt}]

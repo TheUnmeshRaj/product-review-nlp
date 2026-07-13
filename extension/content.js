@@ -127,6 +127,7 @@ function mountInlineIntel(product) {
   const shell = document.createElement('section');
   shell.id = 'review-intel-overlay';
   shell.setAttribute('aria-label', 'Review Intel analysis section');
+  shell.className = 'ri-inline-shell';
   shell.innerHTML = buildInlineHTML(product);
 
   const anchor = getInlineAnchor();
@@ -137,6 +138,11 @@ function mountInlineIntel(product) {
   }
 
   shell.querySelector('#ri-close')?.addEventListener('click', () => toggleInlineIntel(shell));
+
+  const filterSelect = shell.querySelector('#ri-time-filter');
+  filterSelect?.addEventListener('change', () => {
+    runPipeline(product, shell).catch(() => {});
+  });
 
   runPipeline(product, shell).catch(() => {});
 }
@@ -168,7 +174,16 @@ function buildInlineHTML(product) {
           <div id="ri-title">Review Intelligence</div>
           <div id="ri-subtitle">${escHtml(truncate(product.name, 76))}</div>
         </div>
-        <button id="ri-close" class="ri-inline-close" type="button" aria-label="Remove analysis section">Hide</button>
+        <div class="ri-header-actions">
+          <select id="ri-time-filter" class="ri-select-filter" aria-label="Filter reviews by date">
+            <option value="all" selected>All Time</option>
+            <option value="7">Last 7 Days</option>
+            <option value="30">Last 30 Days</option>
+            <option value="90">Last 90 Days</option>
+            <option value="365">Last Year</option>
+          </select>
+          <button id="ri-close" class="ri-inline-close" type="button" aria-label="Remove analysis section">Hide</button>
+        </div>
       </div>
       <div id="ri-status" class="ri-status ri-status--scraping">Preparing analysis…</div>
       <div id="ri-dashboard" style="display:none"></div>
@@ -206,11 +221,18 @@ async function runPipeline(product, overlay) {
 
   let analytics;
   try {
+    const timeFilter = overlay.querySelector('#ri-time-filter')?.value || 'all';
+
     // Call the backend directly from the content script to avoid extension service-worker lifetime issues
     const resp = await fetch(`${BACKEND_URL}/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ product, reviews: uniqueReviews, aspects: scraped.aspects || [] })
+      body: JSON.stringify({
+        product,
+        reviews: uniqueReviews,
+        aspects: scraped.aspects || [],
+        time_filter: timeFilter
+      })
     });
 
     if (!resp.ok) {
@@ -747,6 +769,44 @@ function escHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function parseMarkdown(text) {
+  let html = escHtml(text);
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  html = html.replace(/^### (.*?)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.*?)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.*?)$/gm, '<h1>$1</h1>');
+  
+  const lines = html.split('\n');
+  let inList = false;
+  const processed = lines.map(line => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      const content = trimmed.substring(2);
+      let prefix = '';
+      if (!inList) {
+        inList = true;
+        prefix = '<ul class="ri-chat-list">';
+      }
+      return `${prefix}<li>${content}</li>`;
+    } else {
+      let suffix = '';
+      if (inList) {
+        inList = false;
+        suffix = '</ul>';
+      }
+      return suffix + line;
+    }
+  });
+  
+  html = processed.join('\n');
+  if (inList) html += '</ul>';
+  
+  html = html.replace(/\n\n/g, '<div class="ri-chat-p-gap"></div>');
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -820,7 +880,7 @@ function toggleChatWindow() {
     
     const msgs = win.querySelectorAll('.ri-chat-msg');
     const last = Array.from(msgs).reverse().find(el => el.dataset.role === 'assistant');
-    if (last) last.querySelector('.ri-chat-bubble').textContent = response;
+    if (last) last.querySelector('.ri-chat-bubble').innerHTML = parseMarkdown(response);
   });
 }
 
@@ -836,7 +896,7 @@ function appendChatMessage(role, text) {
     <div class="ri-chat-row">
       ${role === 'assistant' ? '<div class="ri-chat-avatar"><img src="' + (chrome.runtime?.getURL ? chrome.runtime.getURL('icons/icon48.png') : 'icons/icon48.png') + '"/></div>' : ''}
       <div class="ri-chat-body">
-        <div class="ri-chat-bubble">${escHtml(text)}</div>
+        <div class="ri-chat-bubble">${parseMarkdown(text)}</div>
         <div class="ri-chat-time">${time}</div>
       </div>
     </div>
