@@ -113,7 +113,11 @@ function injectTriggerButton(product) {
     document.querySelector('#reviewsMedley') ||
     document.body;
 
-  target.parentNode?.insertBefore(btn, target) || document.body.appendChild(btn);
+  if (target && target !== document.body && target.parentNode) {
+    target.parentNode.insertBefore(btn, target);
+  } else {
+    document.body.appendChild(btn);
+  }
 }
 
 function mountInlineIntel(product) {
@@ -126,7 +130,7 @@ function mountInlineIntel(product) {
   shell.innerHTML = buildInlineHTML(product);
 
   const anchor = getInlineAnchor();
-  if (anchor?.parentNode) {
+  if (anchor && anchor !== document.body && anchor.parentNode) {
     anchor.parentNode.insertBefore(shell, anchor);
   } else {
     document.body.appendChild(shell);
