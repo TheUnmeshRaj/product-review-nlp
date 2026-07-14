@@ -14,8 +14,23 @@
 const BACKEND_URL = 'http://localhost:8000';
 const MAX_REVIEWS = 300;
 let activeSessionId = 0;
-// Inline SVG icon used for chat FAB and avatar (keeps it visible from page context)
-const CHAT_ICON_SVG = `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' width='48' height='48'><rect rx='10' width='48' height='48' fill='%233b82f6'/><path d='M24 12a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm0 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8z' fill='%23fff' opacity='0.96'/></svg>`)}`;
+const CHAT_ICON_SVG = `data:image/svg+xml;utf8,${encodeURIComponent(`
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#0ea5e9"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="48" height="48" rx="12" fill="url(#bg)"/>
+
+  <path
+    fill="#fff"
+    d="M16 13h16a4 4 0 0 1 4 4v10a4 4 0 0 1-4 4H21l-5 5v-5h0a4 4 0 0 1-4-4V17a4 4 0 0 1 4-4z"
+  />
+</svg>
+`)}`;
 
 async function waitForScraper(timeoutMs = 8000) {
   if (window.ReviewScraper) return;
@@ -141,10 +156,10 @@ function mountInlineIntel(product) {
 
   const filterSelect = shell.querySelector('#ri-time-filter');
   filterSelect?.addEventListener('change', () => {
-    runPipeline(product, shell).catch(() => {});
+    runPipeline(product, shell).catch(() => { });
   });
 
-  runPipeline(product, shell).catch(() => {});
+  runPipeline(product, shell).catch(() => { });
 }
 
 function toggleInlineIntel(shell) {
@@ -427,11 +442,11 @@ function renderFeaturePanels(praised, complained, selectionState, scraped, analy
   const allReviews = scraped.reviews || [];
   const backendReviews = analytics.reviews || [];
 
-  const praisedCards = filteredPraised.map(([feature, scores]) => 
+  const praisedCards = filteredPraised.map(([feature, scores]) =>
     renderFeatureCard('praised', feature, scores, allReviews, backendReviews)
   ).join('');
 
-  const complainedCards = filteredComplained.map(([feature, scores]) => 
+  const complainedCards = filteredComplained.map(([feature, scores]) =>
     renderFeatureCard('complained', feature, scores, allReviews, backendReviews)
   ).join('');
 
@@ -550,7 +565,7 @@ function renderFeatureCard(type, feature, scores, allReviews, backendReviews) {
   const negative = clampPercent(scores?.negative || 0);
   const total = Math.max(1, (scores?.total || 1));
   const isPraised = type === 'praised';
-  
+
   // Find reviews mentioning this feature
   const mentionCount = (backendReviews || allReviews || []).filter(r => {
     if (!Array.isArray(r.aspects)) return false;
@@ -776,7 +791,7 @@ function parseMarkdown(text) {
   html = html.replace(/^### (.*?)$/gm, '<h3>$1</h3>');
   html = html.replace(/^## (.*?)$/gm, '<h2>$1</h2>');
   html = html.replace(/^# (.*?)$/gm, '<h1>$1</h1>');
-  
+
   const lines = html.split('\n');
   let inList = false;
   const processed = lines.map(line => {
@@ -798,10 +813,10 @@ function parseMarkdown(text) {
       return suffix + line;
     }
   });
-  
+
   html = processed.join('\n');
   if (inList) html += '</ul>';
-  
+
   html = html.replace(/\n\n/g, '<div class="ri-chat-p-gap"></div>');
   html = html.replace(/\n/g, '<br>');
   return html;
@@ -870,14 +885,14 @@ function toggleChatWindow() {
     appendChatMessage('user', text);
     input.value = '';
     appendChatMessage('assistant', 'Thinking...');
-    
+
     let asin = window.__REVIEW_INTEL_SCRAPED__?.product?.asin || window.__REVIEW_INTEL_ANALYTICS__?.product?.asin || '';
     if (!asin) {
       asin = getAsinFromUrl();
     }
 
     const response = await generateChatResponse(text, asin);
-    
+
     const msgs = win.querySelectorAll('.ri-chat-msg');
     const last = Array.from(msgs).reverse().find(el => el.dataset.role === 'assistant');
     if (last) last.querySelector('.ri-chat-bubble').innerHTML = parseMarkdown(response);
@@ -928,10 +943,10 @@ async function generateChatResponse(text, asin) {
 
     const data = await resp.json();
     const reply = data.response;
-    
+
     chatHistory.push({ role: 'user', content: text });
     chatHistory.push({ role: 'assistant', content: reply });
-    
+
     if (chatHistory.length > 20) {
       chatHistory = chatHistory.slice(-20);
     }
@@ -957,7 +972,7 @@ function renderPriceHistoryCard(analytics, scraped) {
       let values = null;
       let symbol = '₹';
       let currentVal = 'N/A';
-      
+
       const resp = await new Promise(resolve => {
         try {
           chrome.runtime.sendMessage({ type: 'FETCH_PRICE_HISTORY', asin }, (r) => {
