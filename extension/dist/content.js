@@ -374,14 +374,6 @@ function renderDashboard(overlay, analytics, scraped) {
           <div class="ri-insight-box" id="ri-insight-summary">
             <strong>Summary:</strong> ${escHtml(analytics.summary || '')}
           </div>
-        ${analytics.common_complaints?.length ? `
-          <div class="ri-insight-box">
-            <strong>Common Complaints:</strong>
-            <div class="ri-tags">
-              ${analytics.common_complaints.map(item => `<span class="ri-tag ri-tag-neg">${escHtml(item)}</span>`).join('')}
-            </div>
-          </div>
-        ` : ''}
       </div>
     </div>
 
